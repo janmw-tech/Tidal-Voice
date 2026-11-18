@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b0b0d">
+<meta name="robots" content="noindex, nofollow">
 <title>Tidal Voice</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230b0b0d'/%3E%3Crect x='38' y='18' width='24' height='40' rx='12' fill='%2333e1ff'/%3E%3Cpath d='M28 50a22 22 0 0 0 44 0M50 72v12' stroke='%2333e1ff' stroke-width='6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
@@ -54,14 +55,45 @@
   code{background:#0f0f12;border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:13px;word-break:break-all}
   .hist li{font-size:14px;color:var(--muted);padding:4px 0}
   .hist{padding-left:18px;margin:0}
+  .modes{display:flex;gap:6px;background:#0f0f12;border:1px solid var(--line);border-radius:12px;padding:4px}
+  .modes button{flex:1;background:none;border:none;color:var(--muted);padding:9px;border-radius:9px;font-size:15px;font-weight:600}
+  .modes button.on{background:#24242b;color:var(--text)}
+  .modes button.on[data-mode=remove]{background:rgba(255,93,93,.18);color:var(--err)}
+  button.primary.danger{background:var(--err);color:#2a0000}
+  #lock{position:fixed;inset:0;background:var(--bg);z-index:50;display:flex;align-items:center;justify-content:center;padding:24px}
+  #lock .box{width:100%;max-width:340px;text-align:center}
+  #lock .ico{font-size:44px;margin-bottom:8px}
+  #lock input{text-align:center;font-size:26px;letter-spacing:10px;margin-top:16px}
+  #lock .reset{background:none;border:none;color:var(--muted);font-size:13px;margin-top:22px;text-decoration:underline}
+  body.locked main{display:none}
   [hidden]{display:none!important}
 </style>
 </head>
 <body>
+<div id="lock" hidden>
+  <div class="box">
+    <div class="ico">🔒</div>
+    <h1>Tidal <span>Voice</span></h1>
+    <div class="muted" style="margin-top:6px">Gesperrt – bitte PIN eingeben</div>
+    <form id="unlockForm">
+      <input id="pinInput" type="password" inputmode="numeric" autocomplete="off" maxlength="12">
+      <button class="primary" id="unlockBtn" type="submit">Entsperren</button>
+    </form>
+    <div class="status" id="lockStatus"></div>
+    <button class="reset" id="resetAll">PIN vergessen? App zurücksetzen</button>
+    <div id="resetConfirm" hidden>
+      <div class="muted" style="margin-top:12px">Das löscht PIN, Tidal-Anmeldung, Playlists und Verlauf auf diesem Gerät. Deine Tidal-Playlists selbst bleiben unverändert.</div>
+      <button class="primary danger" id="resetYes">Ja, alles zurücksetzen</button>
+    </div>
+  </div>
+</div>
 <main>
   <header>
     <h1>Tidal <span>Voice</span></h1>
-    <button class="iconbtn" id="toggleSettings">⚙︎ Einstellungen</button>
+    <div style="display:flex;gap:8px">
+      <button class="iconbtn" id="headerLock" hidden aria-label="Sperren">🔒</button>
+      <button class="iconbtn" id="toggleSettings">⚙︎ Einstellungen</button>
+    </div>
   </header>
 
   <!-- Hauptansicht -->
@@ -75,11 +107,15 @@
       <button id="mic" aria-label="Sprechen">
         <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
-      <div id="transcript" class="hint">Tippen und sprechen, z.&nbsp;B.<br>„Füge Bohemian Rhapsody von Queen zu Roadtrip hinzu“</div>
+      <div id="transcript" class="hint">Tippen und sprechen, z.&nbsp;B.<br>„Füge Bohemian Rhapsody von Queen zu Roadtrip hinzu“<br>oder „Entferne Bohemian Rhapsody aus Roadtrip“</div>
     </div>
 
     <div class="card" id="cmdCard">
       <h2>Befehl</h2>
+      <div class="modes" id="modes">
+        <button data-mode="add" class="on">＋ Hinzufügen</button>
+        <button data-mode="remove">－ Entfernen</button>
+      </div>
       <label for="songInput">Song</label>
       <div class="row">
         <input id="songInput" placeholder="Titel und Künstler" autocomplete="off">
@@ -93,7 +129,7 @@
     </div>
 
     <div class="card" id="histCard" hidden>
-      <h2>Zuletzt hinzugefügt</h2>
+      <h2>Verlauf</h2>
       <ul class="hist" id="hist"></ul>
     </div>
   </section>
@@ -139,6 +175,29 @@
       <input id="country" maxlength="2" style="text-transform:uppercase">
       <div class="status" id="setStatus"></div>
     </div>
+
+    <div class="card">
+      <h2>4 · Sicherheit</h2>
+      <div class="muted" id="pinState"></div>
+      <label for="pinNew">Neue PIN (mind. 4 Ziffern)</label>
+      <input id="pinNew" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12">
+      <label for="pinNew2">PIN wiederholen</label>
+      <input id="pinNew2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="12">
+      <button class="secondary" id="pinSave" style="margin-top:12px;width:100%">PIN speichern</button>
+      <label for="lockAfter">Automatisch sperren, wenn die App im Hintergrund war</label>
+      <select id="lockAfter">
+        <option value="0">sofort</option>
+        <option value="1">nach 1 Minute</option>
+        <option value="5">nach 5 Minuten</option>
+        <option value="15">nach 15 Minuten</option>
+        <option value="60">nach 1 Stunde</option>
+      </select>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" id="lockNow">Jetzt sperren</button>
+        <button class="secondary" id="pinRemove">PIN entfernen</button>
+      </div>
+      <div class="status" id="secStatus"></div>
+    </div>
   </section>
 </main>
 
@@ -183,16 +242,21 @@
     if (!TTS || !cfg.speak) return;
     try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.lang = 'de-DE'; TTS.speak(u); } catch {}
   }
-  function say(msg, force) {
-    if (!TTS || (!cfg.speak && !force)) return;
+  function say(msg, force, onEnd) {
+    let done = false;
+    const fin = () => { if (done) return; done = true; if (onEnd) onEnd(); };
+    if (!TTS || (!cfg.speak && !force)) { fin(); return; }
     try {
       if (TTS.speaking || TTS.pending) TTS.cancel();
       const u = new SpeechSynthesisUtterance(msg);
       u.lang = 'de-DE'; if (deVoice) u.voice = deVoice;
       u.volume = 1; u.rate = 1;
+      u.onend = fin; u.onerror = fin;
       // kurze Pause nach cancel(), sonst verschluckt Chrome die Ausgabe
       setTimeout(() => { TTS.resume(); TTS.speak(u); }, 120);
-    } catch {}
+      // Sicherheitsnetz, falls Chrome onend nicht meldet
+      if (onEnd) setTimeout(fin, 2000 + msg.length * 110);
+    } catch { fin(); }
   }
 
   // ---------- OAuth (PKCE) ----------
@@ -338,10 +402,15 @@
   // ---------- Sprachbefehl verstehen ----------
   const fold = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
   const tokenize = s => s.toLowerCase().replace(/[^\p{L}\p{N}'&]+/gu, ' ').trim().split(/\s+/).filter(Boolean).map(o => ({ o, f: fold(o) }));
-  const LEAD = new Set('bitte hey ok okay fuge fuege pack packe leg lege tu tue setz setze speicher speichere add hinzufugen den das die song lied titel track mal noch'.split(' '));
-  const TRAIL = new Set('zu zur zum in auf nach der die den meine meiner meinen playlist liste hinzu hinzufugen bitte'.split(' '));
-  const CONNECT = new Set('zu zur zum in auf nach playlist liste'.split(' '));
-  const PL_STOP = new Set('die der den meine meiner meinen playlist liste hinzu hinzufugen bitte'.split(' '));
+  const REMOVE_VERBS = new Set('entferne entfern entfernen losche losch loschen loeschen streiche streich nimm schmeiss schmeis wirf remove delete'.split(' '));
+  const LEAD = new Set(('bitte hey ok okay fuge fuege pack packe leg lege tu tue setz setze speicher speichere add hinzufugen den das die song lied titel track mal noch ' + [...REMOVE_VERBS].join(' ')).split(' '));
+  const TRAIL = new Set('zu zur zum in auf nach aus von der die den dem meine meiner meinen playlist liste hinzu hinzufugen raus heraus entfernen loschen bitte'.split(' '));
+  const CONNECT = new Set('zu zur zum in auf nach aus playlist liste'.split(' '));
+  const PL_STOP = new Set('die der den dem meine meiner meinen playlist liste hinzu hinzufugen raus heraus entfernen loschen bitte'.split(' '));
+  const isRemoveCmd = text => {
+    const f = tokenize(text).map(x => x.f);
+    return f.some(w => REMOVE_VERBS.has(w)) || (f.includes('aus') && f.some(w => w === 'raus' || w === 'heraus'));
+  };
 
   function trimTokens(t) {
     let a = 0, b = t.length;
@@ -433,6 +502,136 @@
     return list;
   }
 
+  // ---------- Entfernen: Song in der Playlist finden ----------
+  let mode = 'add';
+  // ---------- Mündliche Bestätigung beim Entfernen ----------
+  let pendingConfirm = false;
+  const YES = new Set('ja jawohl jo jep jup genau richtig korrekt ok okay bestatigen bestatige entfernen entferne loschen losche mach yes'.split(' '));
+  const NO = new Set('nein nee ne no nicht abbrechen abbruch stopp stop falsch lass'.split(' '));
+  const NEXT = new Set('nachster nachste nachsten weiter andere anderer anderen naechster'.split(' '));
+
+  function askConfirm(first) {
+    const r = results[selected];
+    const p = playlists.find(x => x.id === $('plSelect').value);
+    if (!r || !p) return;
+    pendingConfirm = true;
+    renderResults();
+    const more = results.length > 1;
+    const by = r.artists ? ' von ' + r.artists : '';
+    const q = (first ? 'Ich habe ' : 'Nächster Treffer: ') + r.title + by + (first ? ' in ' + (p.alias || p.name) + ' gefunden.' : '.') + ' Soll ich ihn entfernen?';
+    status($('status'), 'Sag „Ja“, „Nein“' + (more ? ' oder „Nächster“' : '') + '.', 'info');
+    say(q, true, () => { if (pendingConfirm) startListening('confirm'); });
+  }
+
+  function handleConfirm(alts) {
+    let answer = null;
+    for (const a of alts) {
+      const w = tokenize(a).map(x => x.f);
+      if (w.some(x => NEXT.has(x))) { answer = 'next'; break; }
+      if (w.some(x => NO.has(x))) { answer = 'no'; break; }
+      if (w.some(x => YES.has(x))) { answer = 'yes'; break; }
+    }
+    if (answer === 'yes') { pendingConfirm = false; removeSelected(); return; }
+    if (answer === 'no') { pendingConfirm = false; status($('status'), 'Abgebrochen – nichts entfernt.', 'info'); say('Okay, ich habe nichts entfernt.', true); return; }
+    if (answer === 'next') {
+      if (selected + 1 < results.length) { selected++; askConfirm(false); }
+      else { pendingConfirm = false; status($('status'), 'Keine weiteren Treffer.', 'info'); say('Es gibt keine weiteren Treffer.', true); }
+      return;
+    }
+    // Weder ja noch nein: als neuen Befehl behandeln
+    pendingConfirm = false;
+    handleCommand(alts[0]);
+  }
+
+  function setMode(m) {
+    pendingConfirm = false;
+    mode = m;
+    document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+    results = []; selected = 0; renderResults();
+  }
+
+  async function loadPlaylistItems(pid) {
+    const items = [];
+    const tracks = {}, artists = {};
+    const first = inc => `/playlists/${encodeURIComponent(pid)}/relationships/items?${cc()}&include=${inc}`;
+    let url, pages = 0, j;
+    try { j = await api(first('items,items.artists')); } catch { j = await api(first('items')); }
+    while (true) {
+      (j.data || []).forEach(x => items.push({ id: x.id, type: x.type, itemId: x.meta && x.meta.itemId }));
+      (j.included || []).forEach(x => {
+        if (x.type === 'tracks') tracks[x.id] = x;
+        if (x.type === 'artists') artists[x.id] = x.attributes && x.attributes.name;
+      });
+      url = nextUrl(j.links && j.links.next);
+      if (!url || ++pages >= 50) break;
+      j = await api(url);
+    }
+    const list = items.filter(x => x.type === 'tracks').map(x => {
+      const t = tracks[x.id];
+      const a = t && t.attributes || {};
+      const artIds = (t && t.relationships && t.relationships.artists && t.relationships.artists.data || []).map(r => r.id);
+      return { id: x.id, itemId: x.itemId, title: (a.title || 'Track ' + x.id) + (a.version ? ' (' + a.version + ')' : ''), artists: artIds.map(id => artists[id]).filter(Boolean).join(', ') };
+    });
+    // Fehlende Künstlernamen nachladen (max. 20 pro Anfrage)
+    const missing = list.filter(x => !x.artists).map(x => x.id);
+    for (let i = 0; i < missing.length && i < 400; i += 20) {
+      try {
+        const d = await api(`/tracks?${cc()}&filter[id]=${missing.slice(i, i + 20).join(',')}&include=artists`);
+        const art = Object.fromEntries((d.included || []).filter(x => x.type === 'artists').map(x => [x.id, x.attributes.name]));
+        (d.data || []).forEach(t => {
+          const names = (t.relationships && t.relationships.artists && t.relationships.artists.data || []).map(r => art[r.id]).filter(Boolean).join(', ');
+          list.filter(x => x.id === t.id).forEach(x => { x.artists = names; if (x.title.startsWith('Track ') && t.attributes) x.title = t.attributes.title; });
+        });
+      } catch { break; }
+    }
+    return list;
+  }
+
+  function matchScore(query, item) {
+    const q = tokenize(query).map(x => x.f);
+    if (!q.length) return 0;
+    const hay = tokenize(item.title + ' ' + item.artists).map(x => x.f);
+    let hit = 0;
+    q.forEach(w => { if (hay.some(h => h === w || (w.length > 3 && sim(w, h) >= 0.75))) hit++; });
+    const titleSim = sim(q.join(' '), tokenize(item.title).map(x => x.f).join(' '));
+    return Math.max(hit / q.length, titleSim);
+  }
+
+  async function findInPlaylist(q, p) {
+    const items = await loadPlaylistItems(p.id);
+    return items.map(x => Object.assign({ score: matchScore(q, x) }, x))
+      .filter(x => x.score >= 0.4)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+  }
+
+  async function removeSelected() {
+    const r = results[selected];
+    const p = playlists.find(x => x.id === $('plSelect').value);
+    if (!r || !p) return;
+    $('addBtn').disabled = true;
+    status($('status'), 'Entferne …');
+    const path = `/playlists/${encodeURIComponent(p.id)}/relationships/items?${cc()}`;
+    try {
+      try {
+        await api(path, { method: 'DELETE', body: { data: [{ id: r.id, type: 'tracks', meta: { itemId: r.itemId } }] } });
+      } catch (e) {
+        if (!r.itemId || ![400, 404, 409, 422].includes(e.status)) throw e;
+        await api(path, { method: 'DELETE', body: { data: [{ id: r.id, type: 'tracks' }] } });
+      }
+      const label = r.title + (r.artists ? ' – ' + r.artists : '');
+      status($('status'), '✓ „' + label + '“ wurde aus „' + p.name + '“ entfernt.', 'ok');
+      say(r.title + ' wurde aus ' + (p.alias || p.name) + ' entfernt.');
+      cfg.lastPl = p.id; saveCfg();
+      history.unshift({ t: label, p: p.name, d: Date.now(), a: 'remove' }); history = history.slice(0, 15); S.set('history', history); renderHistory();
+      results.splice(selected, 1); selected = 0; renderResults();
+    } catch (e) {
+      const hint = e.status === 403 ? ' (Ist das deine eigene Playlist und ist der Scope playlists.write freigegeben?)' : '';
+      status($('status'), 'Entfernen fehlgeschlagen: ' + e.message + hint, 'err');
+      say('Das hat leider nicht geklappt.');
+    } finally { updateAddBtn(); }
+  }
+
   function renderResults() {
     const ul = $('results'); ul.innerHTML = '';
     results.forEach((r, i) => {
@@ -445,22 +644,36 @@
   }
   function updateAddBtn() {
     const p = playlists.find(x => x.id === $('plSelect').value);
-    $('addBtn').disabled = !results.length || !p;
-    $('addBtn').textContent = p ? 'Hinzufügen zu „' + (p.alias || p.name) + '“' : 'Hinzufügen';
+    const btn = $('addBtn');
+    btn.disabled = !results.length || !p;
+    btn.classList.toggle('danger', mode === 'remove');
+    const name = p ? '„' + (p.alias || p.name) + '“' : '';
+    btn.textContent = mode === 'remove' ? (p ? 'Entfernen aus ' + name : 'Entfernen') : (p ? 'Hinzufügen zu ' + name : 'Hinzufügen');
   }
 
   async function runSearch(fromVoice) {
     const q = $('songInput').value.trim();
     if (!q) return;
     results = []; selected = 0; renderResults();
-    status($('status'), 'Suche „' + q + '“ …');
+    const p = playlists.find(x => x.id === $('plSelect').value);
     try {
+      if (mode === 'remove') {
+        if (!p) { status($('status'), 'Aus welcher Playlist? Bitte unten auswählen und erneut suchen.', 'info'); return; }
+        status($('status'), 'Suche „' + q + '“ in „' + p.name + '“ …');
+        results = await findInPlaylist(q, p);
+        renderResults();
+        if (!results.length) { status($('status'), '„' + q + '“ ist nicht in „' + p.name + '“.', 'err'); say('Den Song habe ich in der Playlist nicht gefunden.'); return; }
+        status($('status'), 'Gefunden – zum Entfernen bitte bestätigen.', 'info');
+        if (fromVoice) askConfirm(true);
+        return;
+      }
+      status($('status'), 'Suche „' + q + '“ …');
       results = await search(q);
       renderResults();
       if (!results.length) { status($('status'), 'Nichts gefunden für „' + q + '“.', 'err'); say('Nichts gefunden.'); return; }
       $('status').className = 'status';
-      if (fromVoice && cfg.autoAdd && $('plSelect').value) await addSelected();
-      else if (fromVoice && !$('plSelect').value) status($('status'), 'Welche Playlist? Bitte unten auswählen.', 'info');
+      if (fromVoice && cfg.autoAdd && p) await addSelected();
+      else if (fromVoice && !p) status($('status'), 'Welche Playlist? Bitte unten auswählen.', 'info');
     } catch (e) { status($('status'), 'Suche fehlgeschlagen: ' + e.message, 'err'); }
   }
 
@@ -486,10 +699,14 @@
 
   function renderHistory() {
     $('histCard').hidden = !history.length;
-    $('hist').innerHTML = history.map(h => `<li>${esc(h.t)} → <b style="color:var(--text)">${esc(h.p)}</b></li>`).join('');
+    $('hist').innerHTML = history.map(h => h.a === 'remove'
+      ? `<li><span style="color:var(--err)">－</span> ${esc(h.t)} ← aus <b style="color:var(--text)">${esc(h.p)}</b></li>`
+      : `<li><span style="color:var(--ok)">＋</span> ${esc(h.t)} → <b style="color:var(--text)">${esc(h.p)}</b></li>`).join('');
   }
 
   function handleCommand(text) {
+    if (locked) return;
+    setMode(isRemoveCmd(text) ? 'remove' : 'add');
     const { song, pl, heard } = parse(text);
     $('songInput').value = song;
     if (pl) renderSelect(pl.id); else $('plSelect').value = '';
@@ -501,32 +718,42 @@
   // ---------- Spracherkennung ----------
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let rec = null, listening = false;
-  function startListening() {
+  function startListening(kind) {
+    const confirmMode = kind === 'confirm';
     if (!SR) { status($('status'), 'Spracherkennung wird von diesem Browser nicht unterstützt – bitte Chrome verwenden. Du kannst den Song auch eintippen.', 'err'); return; }
     if (listening) { rec && rec.stop(); return; }
-    if (TTS) TTS.cancel();
-    unlockTTS();
-    rec = new SR(); rec.lang = 'de-DE'; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
-    let finalText = '';
-    rec.onstart = () => { listening = true; $('mic').classList.add('listening'); $('transcript').className = ''; $('transcript').textContent = 'Ich höre zu …'; };
+    if (!confirmMode) { if (TTS) TTS.cancel(); unlockTTS(); }
+    rec = new SR(); rec.lang = 'de-DE'; rec.interimResults = true; rec.maxAlternatives = confirmMode ? 4 : 1; rec.continuous = false;
+    let finalText = ''; const alts = [];
+    const waiting = confirmMode ? 'Ja, nein oder nächster?' : 'Ich höre zu …';
+    rec.onstart = () => { listening = true; $('mic').classList.add('listening'); $('transcript').className = ''; $('transcript').textContent = waiting; };
     rec.onresult = e => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalText += e.results[i][0].transcript; else interim += e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          finalText += e.results[i][0].transcript;
+          for (let k = 0; k < e.results[i].length; k++) alts.push(e.results[i][k].transcript);
+        } else interim += e.results[i][0].transcript;
       }
-      $('transcript').textContent = (finalText + ' ' + interim).trim() || 'Ich höre zu …';
+      $('transcript').textContent = (finalText + ' ' + interim).trim() || waiting;
     };
     rec.onerror = e => {
-      const m = { 'not-allowed': 'Mikrofon-Zugriff verweigert. Erlaube ihn in den Chrome-Seiteneinstellungen.', 'no-speech': 'Nichts gehört – nochmal versuchen.', 'network': 'Spracherkennung braucht eine Internetverbindung.' }[e.error] || ('Fehler bei der Spracherkennung: ' + e.error);
-      status($('status'), m, 'err');
+      const m = { 'not-allowed': confirmMode ? 'Automatisches Zuhören wurde blockiert – tippe aufs Mikrofon und sag „Ja“ oder „Nein“.' : 'Mikrofon-Zugriff verweigert. Erlaube ihn in den Chrome-Seiteneinstellungen.',
+                  'no-speech': confirmMode ? 'Nichts gehört – tippe aufs Mikrofon und sag „Ja“ oder „Nein“.' : 'Nichts gehört – nochmal versuchen.',
+                  'network': 'Spracherkennung braucht eine Internetverbindung.' }[e.error] || ('Fehler bei der Spracherkennung: ' + e.error);
+      status($('status'), m, confirmMode && e.error !== 'network' ? 'info' : 'err');
     };
     rec.onend = () => {
       listening = false; $('mic').classList.remove('listening');
-      if (finalText.trim()) { $('transcript').textContent = '„' + finalText.trim() + '“'; handleCommand(finalText.trim()); }
-      else if ($('transcript').textContent === 'Ich höre zu …') { $('transcript').className = 'hint'; $('transcript').textContent = 'Tippen und sprechen'; }
+      const text = finalText.trim();
+      if (text) {
+        $('transcript').textContent = '„' + text + '“';
+        if (confirmMode) handleConfirm(alts.length ? alts : [text]); else handleCommand(text);
+      } else if ($('transcript').textContent === waiting) { $('transcript').className = 'hint'; $('transcript').textContent = confirmMode ? 'Tippen und „Ja“ oder „Nein“ sagen' : 'Tippen und sprechen'; }
     };
-    try { rec.start(); } catch (e) { status($('status'), 'Konnte nicht starten: ' + e.message, 'err'); }
+    try { rec.start(); } catch (e) { status($('status'), confirmMode ? 'Tippe aufs Mikrofon und sag „Ja“ oder „Nein“.' : 'Konnte nicht starten: ' + e.message, confirmMode ? 'info' : 'err'); }
   }
+
 
   // ---------- UI ----------
   function showSettings(on) {
@@ -541,11 +768,12 @@
   }
 
   $('toggleSettings').onclick = () => showSettings($('settingsView').hidden);
-  $('mic').onclick = startListening;
+  $('mic').onclick = () => !locked && startListening(pendingConfirm ? 'confirm' : 'command');
   $('searchBtn').onclick = () => runSearch(false);
   $('songInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(false); } });
   $('plSelect').onchange = updateAddBtn;
-  $('addBtn').onclick = () => { unlockTTS(); addSelected(); };
+  $('addBtn').onclick = () => { pendingConfirm = false; unlockTTS(); mode === 'remove' ? removeSelected() : addSelected(); };
+  document.querySelectorAll('#modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   $('testSpeak').onclick = () => {
     if (!TTS) { status($('setStatus'), 'Dieser Browser unterstützt keine Sprachausgabe.', 'err'); return; }
     pickVoice();
@@ -568,6 +796,90 @@
   bind('country', 'country', 'value', v => (v.trim() || 'DE').toUpperCase());
   bind('autoAdd', 'autoAdd', 'checked');
   bind('speak', 'speak', 'checked');
+
+
+  // ---------- Sicherheit: PIN-Sperre ----------
+  const sec = Object.assign({ hash: '', salt: '', lockAfter: 5, fails: 0, waitUntil: 0 }, S.get('sec', {}));
+  const saveSec = () => S.set('sec', sec);
+  let locked = false, hiddenAt = 0;
+  const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const fromB64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  async function pinHash(pin, saltB64) {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: fromB64(saltB64), iterations: 200000 }, key, 256);
+    return toB64(bits);
+  }
+  function lock() {
+    if (!sec.hash) return;
+    locked = true;
+    if (listening && rec) try { rec.abort(); } catch {}
+    if (TTS) TTS.cancel();
+    pendingConfirm = false;
+    document.body.classList.add('locked');
+    $('lock').hidden = false;
+    $('pinInput').value = '';
+    $('resetConfirm').hidden = true;
+    $('lockStatus').className = 'status';
+    setTimeout(() => { try { $('pinInput').focus(); } catch {} }, 50);
+  }
+  function unlockUI() {
+    locked = false;
+    document.body.classList.remove('locked');
+    $('lock').hidden = true;
+  }
+  async function tryUnlock(e) {
+    e.preventDefault();
+    const now = Date.now();
+    if (sec.waitUntil > now) { status($('lockStatus'), 'Zu viele Fehlversuche – bitte ' + Math.ceil((sec.waitUntil - now) / 1000) + ' s warten.', 'err'); return; }
+    const pin = $('pinInput').value.trim();
+    if (!pin) return;
+    $('unlockBtn').disabled = true;
+    try {
+      if (await pinHash(pin, sec.salt) === sec.hash) {
+        sec.fails = 0; sec.waitUntil = 0; saveSec(); unlockUI();
+      } else {
+        sec.fails++;
+        if (sec.fails >= 5) sec.waitUntil = Date.now() + Math.min(30000 * Math.pow(2, sec.fails - 5), 15 * 60000);
+        saveSec();
+        $('pinInput').value = '';
+        status($('lockStatus'), sec.fails >= 5 ? 'Falsche PIN – gesperrt für ' + Math.ceil((sec.waitUntil - Date.now()) / 1000) + ' s.' : 'Falsche PIN (' + sec.fails + '/5).', 'err');
+      }
+    } finally { $('unlockBtn').disabled = false; }
+  }
+  function renderSec() {
+    $('pinState').textContent = sec.hash ? 'PIN-Sperre ist aktiv ✓' : 'Noch keine PIN – jeder mit deinem entsperrten Handy kann die App benutzen.';
+    $('pinRemove').disabled = !sec.hash; $('lockNow').disabled = !sec.hash;
+    $('headerLock').hidden = !sec.hash;
+    $('lockAfter').value = String(sec.lockAfter);
+  }
+  async function savePin() {
+    const a = $('pinNew').value.trim(), b = $('pinNew2').value.trim();
+    if (!/^\d{4,12}$/.test(a)) { status($('secStatus'), 'Die PIN muss aus 4 bis 12 Ziffern bestehen.', 'err'); return; }
+    if (a !== b) { status($('secStatus'), 'Die beiden PINs stimmen nicht überein.', 'err'); return; }
+    const salt = new Uint8Array(16); crypto.getRandomValues(salt);
+    sec.salt = toB64(salt); sec.hash = await pinHash(a, sec.salt); sec.fails = 0; sec.waitUntil = 0; saveSec();
+    $('pinNew').value = $('pinNew2').value = '';
+    renderSec();
+    status($('secStatus'), 'PIN gespeichert. Die App fragt ab jetzt beim Öffnen danach.', 'ok');
+  }
+  $('unlockForm').addEventListener('submit', tryUnlock);
+  $('pinSave').onclick = savePin;
+  $('lockNow').onclick = lock;
+  $('headerLock').onclick = lock;
+  $('pinRemove').onclick = () => { sec.hash = ''; sec.salt = ''; saveSec(); renderSec(); status($('secStatus'), 'PIN entfernt.', 'info'); };
+  $('lockAfter').onchange = () => { sec.lockAfter = Number($('lockAfter').value); saveSec(); };
+  $('resetAll').onclick = () => { $('resetConfirm').hidden = false; };
+  $('resetYes').onclick = () => {
+    try { Object.keys(localStorage).filter(k => k.startsWith('tv_')).forEach(k => localStorage.removeItem(k)); } catch {}
+    location.replace(REDIRECT);
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (!sec.hash) return;
+    if (document.hidden) { hiddenAt = Date.now(); if (sec.lockAfter === 0) lock(); }
+    else if (!locked && hiddenAt && Date.now() - hiddenAt >= sec.lockAfter * 60000) lock();
+  });
+  renderSec();
+  if (sec.hash) lock();
 
   renderPlaylists(); renderHistory(); refreshAuthInfo();
   if (!cfg.clientId || !tokens) showSettings(true);
