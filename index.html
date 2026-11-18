@@ -251,6 +251,7 @@
       const attempts = [
         `/playlists?${cc()}&filter[r.owners.id]=${encodeURIComponent(uid)}`,
         `/playlists?${cc()}&filter[owners.id]=${encodeURIComponent(uid)}`,
+        `/userCollectionPlaylists/me/relationships/items?${cc()}&include=items`,
         `/userCollections/${encodeURIComponent(uid)}/relationships/playlists?${cc()}&include=playlists`
       ];
       let found = null, lastErr = null;
@@ -379,9 +380,18 @@
   let results = [], selected = 0;
 
   async function search(q) {
-    const r = await api(`/searchResults/${encodeURIComponent(q)}/relationships/tracks?${cc()}&include=tracks`);
-    const order = (r.data || []).map(x => x.id);
-    const byId = Object.fromEntries((r.included || []).filter(x => x.type === 'tracks').map(x => [x.id, x]));
+    // Aktuelle Tidal-API: Suchtext als filter[query], danach Tracks über die (undurchsichtige) Ergebnis-ID
+    const r = await api(`/searchResults?${cc()}&filter[query]=${encodeURIComponent(q)}&include=tracks`);
+    const res = Array.isArray(r.data) ? r.data[0] : r.data;
+    let order = ((res && res.relationships && res.relationships.tracks && res.relationships.tracks.data) || []).map(x => x.id);
+    let included = r.included || [];
+    if (!included.some(x => x.type === 'tracks') && res && res.id) {
+      const t = await api(`/searchResults/${encodeURIComponent(res.id)}/relationships/tracks?${cc()}&include=tracks`);
+      if (!order.length) order = (t.data || []).map(x => x.id);
+      included = included.concat(t.included || []);
+    }
+    if (!order.length) order = included.filter(x => x.type === 'tracks').map(x => x.id);
+    const byId = Object.fromEntries(included.filter(x => x.type === 'tracks').map(x => [x.id, x]));
     let list = order.map(id => byId[id]).filter(Boolean).slice(0, 6)
       .map(x => ({ id: x.id, title: x.attributes.title + (x.attributes.version ? ' (' + x.attributes.version + ')' : ''), artists: '' }));
     if (!list.length && order.length) list = order.slice(0, 6).map(id => ({ id, title: 'Track ' + id, artists: '' }));
