@@ -310,17 +310,27 @@
     await tokenRequest({ grant_type: 'refresh_token', client_id: cfg.clientId, refresh_token: tokens.refresh });
   }
 
-  async function api(path, opts = {}, retried = false) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function api(path, opts = {}, retried = false, tries429 = 0) {
     const url = path.startsWith('http') ? path : API + path;
     const headers = { Authorization: 'Bearer ' + await accessToken(), Accept: 'application/vnd.api+json' };
     if (opts.body) headers['Content-Type'] = 'application/vnd.api+json';
     const r = await fetch(url, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-    if (r.status === 401 && !retried) { await refresh(); return api(path, opts, true); }
+    if (r.status === 401 && !retried) { await refresh(); return api(path, opts, true, tries429); }
+    if (r.status === 429 && tries429 < 4) {
+      // Tidal bremst: so lange warten, wie Tidal sagt (Retry-After), sonst 2, 4, 8, 16 s
+      const ra = Number(r.headers.get('Retry-After'));
+      const wait = Math.min((ra > 0 ? ra * 1000 : 2000 * Math.pow(2, tries429)), 30000);
+      if (opts.onWait) opts.onWait(Math.ceil(wait / 1000));
+      await sleep(wait);
+      return api(path, opts, retried, tries429 + 1);
+    }
     const text = await r.text();
     let j = null; try { j = text ? JSON.parse(text) : {}; } catch { j = { raw: text }; }
     if (!r.ok) {
       const d = j && j.errors && j.errors[0];
-      const err = new Error((d && (d.detail || d.title)) || ('HTTP ' + r.status));
+      const msg = r.status === 429 ? 'Tidal hat zu viele Anfragen bekommen (429) – bitte eine Minute warten.' : ((d && (d.detail || d.title)) || ('HTTP ' + r.status));
+      const err = new Error(msg);
       err.status = r.status; throw err;
     }
     return j || {};
@@ -550,12 +560,20 @@
     results = []; selected = 0; renderResults();
   }
 
-  async function loadPlaylistItems(pid) {
-    const items = [];
-    const tracks = {}, artists = {};
+  // Playlist-Inhalte werden 15 Minuten zwischengespeichert, damit nicht jede Suche alles neu lädt
+  const ITEMS_TTL = 15 * 60000;
+  const itemsCache = S.get('itemsCache', {});
+  const saveItemsCache = () => S.set('itemsCache', itemsCache);
+  function invalidateItems(pid) { delete itemsCache[pid]; saveItemsCache(); }
+
+  async function loadPlaylistItems(pid, onWait) {
+    const c = itemsCache[pid];
+    if (c && Date.now() - c.t < ITEMS_TTL) return c.list;
+    const items = [], tracks = {}, artists = {};
     const first = inc => `/playlists/${encodeURIComponent(pid)}/relationships/items?${cc()}&include=${inc}`;
     let url, pages = 0, j;
-    try { j = await api(first('items,items.artists')); } catch { j = await api(first('items')); }
+    try { j = await api(first('items,items.artists'), { onWait }); }
+    catch (e) { if (e.status === 429) throw e; j = await api(first('items'), { onWait }); }
     while (true) {
       (j.data || []).forEach(x => items.push({ id: x.id, type: x.type, itemId: x.meta && x.meta.itemId }));
       (j.included || []).forEach(x => {
@@ -563,34 +581,39 @@
         if (x.type === 'artists') artists[x.id] = x.attributes && x.attributes.name;
       });
       url = nextUrl(j.links && j.links.next);
-      if (!url || ++pages >= 50) break;
-      j = await api(url);
+      if (!url || ++pages >= 60) break;
+      await sleep(250); // sanft blättern, damit Tidal nicht bremst
+      j = await api(url, { onWait });
     }
     const list = items.filter(x => x.type === 'tracks').map(x => {
       const t = tracks[x.id];
       const a = t && t.attributes || {};
       const artIds = (t && t.relationships && t.relationships.artists && t.relationships.artists.data || []).map(r => r.id);
-      return { id: x.id, itemId: x.itemId, title: (a.title || 'Track ' + x.id) + (a.version ? ' (' + a.version + ')' : ''), artists: artIds.map(id => artists[id]).filter(Boolean).join(', ') };
+      return { id: x.id, itemId: x.itemId, title: (a.title || '') + (a.version ? ' (' + a.version + ')' : ''), artists: artIds.map(id => artists[id]).filter(Boolean).join(', ') };
     });
-    // Fehlende Künstlernamen nachladen (max. 20 pro Anfrage)
-    const missing = list.filter(x => !x.artists).map(x => x.id);
-    for (let i = 0; i < missing.length && i < 400; i += 20) {
-      try {
-        const d = await api(`/tracks?${cc()}&filter[id]=${missing.slice(i, i + 20).join(',')}&include=artists`);
-        const art = Object.fromEntries((d.included || []).filter(x => x.type === 'artists').map(x => [x.id, x.attributes.name]));
-        (d.data || []).forEach(t => {
-          const names = (t.relationships && t.relationships.artists && t.relationships.artists.data || []).map(r => art[r.id]).filter(Boolean).join(', ');
-          list.filter(x => x.id === t.id).forEach(x => { x.artists = names; if (x.title.startsWith('Track ') && t.attributes) x.title = t.attributes.title; });
-        });
-      } catch { break; }
-    }
+    itemsCache[pid] = { t: Date.now(), list };
+    saveItemsCache();
     return list;
+  }
+
+  async function fillArtists(list) {
+    // Fehlende Titel/Künstler mit EINER Anfrage für alle Kandidaten nachladen
+    const missing = list.filter(x => !x.artists || !x.title).map(x => x.id);
+    if (!missing.length) return;
+    try {
+      const d = await api(`/tracks?${cc()}&filter[id]=${[...new Set(missing)].slice(0, 20).join(',')}&include=artists`);
+      const art = Object.fromEntries((d.included || []).filter(x => x.type === 'artists').map(x => [x.id, x.attributes.name]));
+      (d.data || []).forEach(t => {
+        const names = (t.relationships && t.relationships.artists && t.relationships.artists.data || []).map(r => art[r.id]).filter(Boolean).join(', ');
+        list.filter(x => x.id === t.id).forEach(x => { if (!x.artists) x.artists = names; if (!x.title && t.attributes) x.title = t.attributes.title; });
+      });
+    } catch {}
   }
 
   function matchScore(query, item) {
     const q = tokenize(query).map(x => x.f);
-    if (!q.length) return 0;
-    const hay = tokenize(item.title + ' ' + item.artists).map(x => x.f);
+    if (!q.length || !item.title) return 0;
+    const hay = tokenize(item.title + ' ' + (item.artists || '')).map(x => x.f);
     let hit = 0;
     q.forEach(w => { if (hay.some(h => h === w || (w.length > 3 && sim(w, h) >= 0.75))) hit++; });
     const titleSim = sim(q.join(' '), tokenize(item.title).map(x => x.f).join(' '));
@@ -598,11 +621,15 @@
   }
 
   async function findInPlaylist(q, p) {
-    const items = await loadPlaylistItems(p.id);
-    return items.map(x => Object.assign({ score: matchScore(q, x) }, x))
-      .filter(x => x.score >= 0.4)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 6);
+    const onWait = s => status($('status'), 'Tidal bremst gerade – ich warte ' + s + ' s und versuche es erneut …', 'info');
+    let items = await loadPlaylistItems(p.id, onWait);
+    // Titel ohne Namen (nur bei sehr großen Playlists ohne include) für die ersten Kandidaten ergänzen
+    if (items.every(x => !x.title)) await fillArtists(items.slice(0, 20));
+    let cands = items.map(x => Object.assign({}, x, { score: matchScore(q, x) }))
+      .filter(x => x.score >= 0.3).sort((a, b) => b.score - a.score).slice(0, 10);
+    await fillArtists(cands);
+    return cands.map(x => Object.assign(x, { score: matchScore(q, x) }))
+      .filter(x => x.score >= 0.4).sort((a, b) => b.score - a.score).slice(0, 6);
   }
 
   async function removeSelected() {
@@ -624,6 +651,7 @@
       say(r.title + ' wurde aus ' + (p.alias || p.name) + ' entfernt.');
       cfg.lastPl = p.id; saveCfg();
       history.unshift({ t: label, p: p.name, d: Date.now(), a: 'remove' }); history = history.slice(0, 15); S.set('history', history); renderHistory();
+      if (itemsCache[p.id]) { itemsCache[p.id].list = itemsCache[p.id].list.filter(x => !(x.id === r.id && x.itemId === r.itemId)); saveItemsCache(); }
       results.splice(selected, 1); selected = 0; renderResults();
     } catch (e) {
       const hint = e.status === 403 ? ' (Ist das deine eigene Playlist und ist der Scope playlists.write freigegeben?)' : '';
@@ -687,6 +715,7 @@
       await api(`/playlists/${encodeURIComponent(p.id)}/relationships/items?${cc()}`, { method: 'POST', body: { data: [{ id: r.id, type: 'tracks' }] } });
       const label = r.title + (r.artists ? ' – ' + r.artists : '');
       status($('status'), '✓ „' + label + '“ ist jetzt in „' + p.name + '“.', 'ok');
+      invalidateItems(p.id);
       say(r.title + ' wurde zu ' + (p.alias || p.name) + ' hinzugefügt.');
       cfg.lastPl = p.id; saveCfg();
       history.unshift({ t: label, p: p.name, d: Date.now() }); history = history.slice(0, 15); S.set('history', history); renderHistory();
