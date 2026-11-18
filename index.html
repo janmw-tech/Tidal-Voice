@@ -134,6 +134,7 @@
       <h2>3 · Verhalten</h2>
       <div class="toggle"><span>Ohne Nachfrage den besten Treffer hinzufügen</span><input type="checkbox" id="autoAdd"></div>
       <div class="toggle"><span>Ergebnis vorlesen</span><input type="checkbox" id="speak"></div>
+      <button class="secondary" id="testSpeak" style="margin-top:10px;width:100%">🔊 Sprachausgabe testen</button>
       <label for="country">Ländercode</label>
       <input id="country" maxlength="2" style="text-transform:uppercase">
       <div class="status" id="setStatus"></div>
@@ -168,9 +169,30 @@
     el.className = 'status show ' + kind;
     el.textContent = msg;
   }
-  function say(msg) {
-    if (!cfg.speak || !('speechSynthesis' in window)) return;
-    try { const u = new SpeechSynthesisUtterance(msg); u.lang = 'de-DE'; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch {}
+  // Sprachausgabe: Chrome (Android) erlaubt sie nur nach einer Nutzer-Geste,
+  // daher wird sie beim Tippen aufs Mikrofon einmal "entsperrt".
+  const TTS = 'speechSynthesis' in window ? window.speechSynthesis : null;
+  let deVoice = null;
+  function pickVoice() {
+    if (!TTS) return;
+    const v = TTS.getVoices();
+    deVoice = v.find(x => /^de[-_]DE/i.test(x.lang) && x.localService) || v.find(x => /^de/i.test(x.lang)) || null;
+  }
+  if (TTS) { pickVoice(); try { TTS.addEventListener('voiceschanged', pickVoice); } catch { TTS.onvoiceschanged = pickVoice; } }
+  function unlockTTS() {
+    if (!TTS || !cfg.speak) return;
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.lang = 'de-DE'; TTS.speak(u); } catch {}
+  }
+  function say(msg, force) {
+    if (!TTS || (!cfg.speak && !force)) return;
+    try {
+      if (TTS.speaking || TTS.pending) TTS.cancel();
+      const u = new SpeechSynthesisUtterance(msg);
+      u.lang = 'de-DE'; if (deVoice) u.voice = deVoice;
+      u.volume = 1; u.rate = 1;
+      // kurze Pause nach cancel(), sonst verschluckt Chrome die Ausgabe
+      setTimeout(() => { TTS.resume(); TTS.speak(u); }, 120);
+    } catch {}
   }
 
   // ---------- OAuth (PKCE) ----------
@@ -482,7 +504,8 @@
   function startListening() {
     if (!SR) { status($('status'), 'Spracherkennung wird von diesem Browser nicht unterstützt – bitte Chrome verwenden. Du kannst den Song auch eintippen.', 'err'); return; }
     if (listening) { rec && rec.stop(); return; }
-    if (cfg.speak && 'speechSynthesis' in window) speechSynthesis.cancel();
+    if (TTS) TTS.cancel();
+    unlockTTS();
     rec = new SR(); rec.lang = 'de-DE'; rec.interimResults = true; rec.maxAlternatives = 1; rec.continuous = false;
     let finalText = '';
     rec.onstart = () => { listening = true; $('mic').classList.add('listening'); $('transcript').className = ''; $('transcript').textContent = 'Ich höre zu …'; };
@@ -522,7 +545,13 @@
   $('searchBtn').onclick = () => runSearch(false);
   $('songInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(false); } });
   $('plSelect').onchange = updateAddBtn;
-  $('addBtn').onclick = addSelected;
+  $('addBtn').onclick = () => { unlockTTS(); addSelected(); };
+  $('testSpeak').onclick = () => {
+    if (!TTS) { status($('setStatus'), 'Dieser Browser unterstützt keine Sprachausgabe.', 'err'); return; }
+    pickVoice();
+    say('Hallo! So klingt die Sprachausgabe von Tidal Voice.', true);
+    status($('setStatus'), deVoice ? 'Stimme: ' + deVoice.name : 'Keine deutsche Stimme gefunden – Standardstimme wird verwendet.', deVoice ? 'info' : 'err');
+  };
   $('loginBtn').onclick = login;
   $('logoutBtn').onclick = () => { tokens = null; S.del('tokens'); refreshAuthInfo(); };
   $('loadPl').onclick = loadPlaylists;
