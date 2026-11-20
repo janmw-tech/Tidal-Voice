@@ -198,6 +198,15 @@
       </div>
       <div class="status" id="secStatus"></div>
     </div>
+
+    <div class="card" id="androidCard" hidden>
+      <h2>5 · Android-App</h2>
+      <div class="toggle"><span>Auf „Okay Tidal Voice“ hören</span><input type="checkbox" id="wakeToggle"></div>
+      <div class="muted" id="wakeStatus" style="margin-top:6px"></div>
+      <div class="muted" id="overlayHint" style="margin-top:10px">Damit die App sich nach „Okay Tidal Voice“ selbst öffnen darf, braucht sie die Berechtigung „Über anderen Apps einblenden“.</div>
+      <button class="secondary" id="overlayBtn" style="margin-top:10px;width:100%">Berechtigung erteilen</button>
+      <button class="secondary" id="changeUrl" style="margin-top:10px;width:100%">Adresse der Web-App ändern</button>
+    </div>
   </section>
 </main>
 
@@ -242,9 +251,22 @@
     if (!TTS || !cfg.speak) return;
     try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; u.lang = 'de-DE'; TTS.speak(u); } catch {}
   }
+  // Android-App: native Sprachausgabe/-erkennung über window.TVAndroid
+  const NATIVE = !!window.TVAndroid;
+  const speakCbs = {}; let speakSeq = 0;
+  window.tvOnSpeakDone = id => { const f = speakCbs[id]; delete speakCbs[id]; if (f) f(); };
+  function flowEnd() { if (NATIVE) try { TVAndroid.done(); } catch {} }
+
   function say(msg, force, onEnd) {
     let done = false;
     const fin = () => { if (done) return; done = true; if (onEnd) onEnd(); };
+    if (NATIVE) {
+      if (!cfg.speak && !force) { fin(); return; }
+      const id = 's' + (++speakSeq); speakCbs[id] = fin;
+      try { TVAndroid.speak(msg, id); } catch { fin(); return; }
+      if (onEnd) setTimeout(fin, 3000 + msg.length * 120);
+      return;
+    }
     if (!TTS || (!cfg.speak && !force)) { fin(); return; }
     try {
       if (TTS.speaking || TTS.pending) TTS.cancel();
@@ -528,7 +550,10 @@
     renderResults();
     const more = results.length > 1;
     const by = r.artists ? ' von ' + r.artists : '';
-    const q = (first ? 'Ich habe ' : 'Nächster Treffer: ') + r.title + by + (first ? ' in ' + (p.alias || p.name) + ' gefunden.' : '.') + ' Soll ich ihn entfernen?';
+    const pn = p.alias || p.name;
+    const q = mode === 'remove'
+      ? (first ? 'Ich habe ' : 'Nächster Treffer: ') + r.title + by + (first ? ' in ' + pn + ' gefunden.' : '.') + ' Soll ich ihn entfernen?'
+      : (first ? 'Ich habe ' + r.title + by + ' gefunden.' : 'Nächster Treffer: ' + r.title + by + '.') + ' Soll ich ihn zu ' + pn + ' hinzufügen?';
     status($('status'), 'Sag „Ja“, „Nein“' + (more ? ' oder „Nächster“' : '') + '.', 'info');
     say(q, true, () => { if (pendingConfirm) startListening('confirm'); });
   }
@@ -541,11 +566,11 @@
       if (w.some(x => NO.has(x))) { answer = 'no'; break; }
       if (w.some(x => YES.has(x))) { answer = 'yes'; break; }
     }
-    if (answer === 'yes') { pendingConfirm = false; removeSelected(); return; }
-    if (answer === 'no') { pendingConfirm = false; status($('status'), 'Abgebrochen – nichts entfernt.', 'info'); say('Okay, ich habe nichts entfernt.', true); return; }
+    if (answer === 'yes') { pendingConfirm = false; mode === 'remove' ? removeSelected() : addSelected(); return; }
+    if (answer === 'no') { pendingConfirm = false; status($('status'), 'Abgebrochen – nichts geändert.', 'info'); say('Okay, ich habe nichts geändert.', true, flowEnd); return; }
     if (answer === 'next') {
       if (selected + 1 < results.length) { selected++; askConfirm(false); }
-      else { pendingConfirm = false; status($('status'), 'Keine weiteren Treffer.', 'info'); say('Es gibt keine weiteren Treffer.', true); }
+      else { pendingConfirm = false; status($('status'), 'Keine weiteren Treffer.', 'info'); say('Es gibt keine weiteren Treffer.', true, flowEnd); }
       return;
     }
     // Weder ja noch nein: als neuen Befehl behandeln
@@ -648,7 +673,7 @@
       }
       const label = r.title + (r.artists ? ' – ' + r.artists : '');
       status($('status'), '✓ „' + label + '“ wurde aus „' + p.name + '“ entfernt.', 'ok');
-      say(r.title + ' wurde aus ' + (p.alias || p.name) + ' entfernt.');
+      say(r.title + ' wurde aus ' + (p.alias || p.name) + ' entfernt.', false, flowEnd);
       cfg.lastPl = p.id; saveCfg();
       history.unshift({ t: label, p: p.name, d: Date.now(), a: 'remove' }); history = history.slice(0, 15); S.set('history', history); renderHistory();
       if (itemsCache[p.id]) { itemsCache[p.id].list = itemsCache[p.id].list.filter(x => !(x.id === r.id && x.itemId === r.itemId)); saveItemsCache(); }
@@ -656,7 +681,7 @@
     } catch (e) {
       const hint = e.status === 403 ? ' (Ist das deine eigene Playlist und ist der Scope playlists.write freigegeben?)' : '';
       status($('status'), 'Entfernen fehlgeschlagen: ' + e.message + hint, 'err');
-      say('Das hat leider nicht geklappt.');
+      say('Das hat leider nicht geklappt.', false, flowEnd);
     } finally { updateAddBtn(); }
   }
 
@@ -686,11 +711,11 @@
     const p = playlists.find(x => x.id === $('plSelect').value);
     try {
       if (mode === 'remove') {
-        if (!p) { status($('status'), 'Aus welcher Playlist? Bitte unten auswählen und erneut suchen.', 'info'); return; }
+        if (!p) { status($('status'), 'Aus welcher Playlist? Bitte unten auswählen und erneut suchen.', 'info'); if (fromVoice) say('Ich habe die Playlist nicht erkannt.', true, flowEnd); return; }
         status($('status'), 'Suche „' + q + '“ in „' + p.name + '“ …');
         results = await findInPlaylist(q, p);
         renderResults();
-        if (!results.length) { status($('status'), '„' + q + '“ ist nicht in „' + p.name + '“.', 'err'); say('Den Song habe ich in der Playlist nicht gefunden.'); return; }
+        if (!results.length) { status($('status'), '„' + q + '“ ist nicht in „' + p.name + '“.', 'err'); say('Den Song habe ich in der Playlist nicht gefunden.', true, flowEnd); return; }
         status($('status'), 'Gefunden – zum Entfernen bitte bestätigen.', 'info');
         if (fromVoice) askConfirm(true);
         return;
@@ -698,11 +723,11 @@
       status($('status'), 'Suche „' + q + '“ …');
       results = await search(q);
       renderResults();
-      if (!results.length) { status($('status'), 'Nichts gefunden für „' + q + '“.', 'err'); say('Nichts gefunden.'); return; }
+      if (!results.length) { status($('status'), 'Nichts gefunden für „' + q + '“.', 'err'); say('Dazu habe ich nichts gefunden.', true, flowEnd); return; }
       $('status').className = 'status';
-      if (fromVoice && cfg.autoAdd && p) await addSelected();
-      else if (fromVoice && !p) status($('status'), 'Welche Playlist? Bitte unten auswählen.', 'info');
-    } catch (e) { status($('status'), 'Suche fehlgeschlagen: ' + e.message, 'err'); }
+      if (fromVoice && p) { if (cfg.autoAdd) await addSelected(); else askConfirm(true); }
+      else if (fromVoice && !p) { status($('status'), 'Welche Playlist? Bitte unten auswählen.', 'info'); say('Ich habe die Playlist nicht erkannt.', true, flowEnd); }
+    } catch (e) { status($('status'), 'Suche fehlgeschlagen: ' + e.message, 'err'); if (fromVoice) say('Die Suche ist fehlgeschlagen.', true, flowEnd); }
   }
 
   async function addSelected() {
@@ -716,13 +741,13 @@
       const label = r.title + (r.artists ? ' – ' + r.artists : '');
       status($('status'), '✓ „' + label + '“ ist jetzt in „' + p.name + '“.', 'ok');
       invalidateItems(p.id);
-      say(r.title + ' wurde zu ' + (p.alias || p.name) + ' hinzugefügt.');
+      say(r.title + ' wurde zu ' + (p.alias || p.name) + ' hinzugefügt.', false, flowEnd);
       cfg.lastPl = p.id; saveCfg();
       history.unshift({ t: label, p: p.name, d: Date.now() }); history = history.slice(0, 15); S.set('history', history); renderHistory();
     } catch (e) {
       const hint = e.status === 403 ? ' (Ist das deine eigene Playlist und ist der Scope playlists.write freigegeben?)' : '';
       status($('status'), 'Hinzufügen fehlgeschlagen: ' + e.message + hint, 'err');
-      say('Das hat leider nicht geklappt.');
+      say('Das hat leider nicht geklappt.', false, flowEnd);
     } finally { updateAddBtn(); }
   }
 
@@ -734,7 +759,7 @@
   }
 
   function handleCommand(text) {
-    if (locked) return;
+    if (locked) { flowEnd(); return; }
     setMode(isRemoveCmd(text) ? 'remove' : 'add');
     const { song, pl, heard } = parse(text);
     $('songInput').value = song;
@@ -742,6 +767,7 @@
     updateAddBtn();
     if (!pl && heard) status($('status'), 'Playlist „' + heard + '“ nicht erkannt – bitte auswählen oder einen Rufnamen vergeben.', 'err');
     if (song) runSearch(true);
+    else { say('Ich habe keinen Song verstanden.', true, flowEnd); }
   }
 
   // ---------- Spracherkennung ----------
@@ -749,6 +775,11 @@
   let rec = null, listening = false;
   function startListening(kind) {
     const confirmMode = kind === 'confirm';
+    if (NATIVE) {
+      if (listening) { try { TVAndroid.stopListening(); } catch {} return; }
+      try { TVAndroid.listen(confirmMode ? 'confirm' : 'command'); } catch (e) { status($('status'), 'Spracherkennung nicht verfügbar: ' + e.message, 'err'); }
+      return;
+    }
     if (!SR) { status($('status'), 'Spracherkennung wird von diesem Browser nicht unterstützt – bitte Chrome verwenden. Du kannst den Song auch eintippen.', 'err'); return; }
     if (listening) { rec && rec.stop(); return; }
     if (!confirmMode) { if (TTS) TTS.cancel(); unlockTTS(); }
@@ -909,6 +940,49 @@
   });
   renderSec();
   if (sec.hash) lock();
+
+
+  // ---------- Android-App (Rückrufe aus MainActivity) ----------
+  window.tvOnListening = on => {
+    listening = !!on; $('mic').classList.toggle('listening', listening);
+    if (listening) { $('transcript').className = ''; $('transcript').textContent = pendingConfirm ? 'Ja, nein oder nächster?' : 'Ich höre zu …'; }
+  };
+  window.tvOnPartial = text => { if (text) $('transcript').textContent = text; };
+  window.tvOnSpeech = (kind, altsJson) => {
+    let alts = []; try { alts = JSON.parse(altsJson); } catch {}
+    const text = (alts[0] || '').trim();
+    if (!text) { flowEnd(); return; }
+    $('transcript').className = ''; $('transcript').textContent = '„' + text + '“';
+    if (kind === 'confirm' && pendingConfirm) handleConfirm(alts); else handleCommand(text);
+  };
+  window.tvOnSpeechError = (kind, code) => {
+    listening = false; $('mic').classList.remove('listening');
+    const m = { 'no-speech': 'Nichts gehört.', 'no-match': 'Nicht verstanden.', 'permission': 'Mikrofon-Berechtigung fehlt.', 'network': 'Keine Internetverbindung.', 'busy': 'Spracherkennung ist beschäftigt – nochmal versuchen.', 'unavailable': 'Auf diesem Handy ist keine Spracherkennung verfügbar.' }[code] || ('Spracherkennung: ' + code);
+    status($('status'), kind === 'confirm' ? m + ' Tippe aufs Mikrofon und sag „Ja“ oder „Nein“.' : m, 'err');
+    flowEnd();
+  };
+  window.tvWake = () => {
+    if (locked) { say('Tidal Voice ist gesperrt. Bitte entsperre die App.', true, flowEnd); return; }
+    showSettings(false);
+    startListening(pendingConfirm ? 'confirm' : 'command');
+  };
+  if (NATIVE) {
+    $('androidCard').hidden = false;
+    const renderAndroid = () => {
+      let on = false, overlay = true, st = '';
+      try { on = TVAndroid.isWakeEnabled(); overlay = TVAndroid.canOverlay(); st = TVAndroid.wakeStatus(); } catch {}
+      $('wakeToggle').checked = on;
+      $('wakeStatus').textContent = 'Status: ' + st;
+      $('overlayBtn').hidden = overlay;
+      $('overlayHint').hidden = overlay;
+    };
+    $('wakeToggle').onchange = () => { try { TVAndroid.setWakeEnabled($('wakeToggle').checked); } catch {} setTimeout(renderAndroid, 800); };
+    $('overlayBtn').onclick = () => { try { TVAndroid.openOverlaySettings(); } catch {} };
+    $('changeUrl').onclick = () => { try { TVAndroid.changeUrl(); } catch {} };
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) renderAndroid(); });
+    setInterval(() => { if (!$('settingsView').hidden) renderAndroid(); }, 3000);
+    renderAndroid();
+  }
 
   renderPlaylists(); renderHistory(); refreshAuthInfo();
   if (!cfg.clientId || !tokens) showSettings(true);
